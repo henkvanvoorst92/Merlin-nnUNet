@@ -1,3 +1,81 @@
+# Merlin nnU-Net Segmentation
+
+This repository provides code for running 3D CT segmentation using a fine-tuned [Merlin](https://github.com/StanfordMIMI/Merlin) model within the nnU-Net framework. The model utilizes the pre-trained Merlin encoder and incorporates a decoder with skip connections. This work is associated with the Merlin paper: [*Merlin: Vision Language Foundation Model for 3D Computed Tomography*](https://arxiv.org/abs/2406.06512).
+
+---
+## Installation
+
+To install the necessary package, run the following command from the root of this repository:
+
+```bash
+pip install -e .
+
+```
+
+----------
+
+## Setup Instructions
+
+1.  **Download Pre-trained Model:**
+    
+    -   To download the pre-trained Merlin segmentation model weights, simply run: `python download_weights.py`
+        
+    -   This script will automatically download the directory `nnUNetTrainerMerlin__nnUNetPlans__3d_fullres` from the `stanfordmimi/Merlin` repository on Hugging Face.
+        
+2.  **Place Model Weights:**
+    
+    -   Move the downloaded  `nnUNetTrainerMerlin__nnUNetPlans__3d_fullres`  directory into your nnU-Net results folder, following this structure:
+        
+        ```
+        <your_nnUNet_folder>/nnUNet_results/<dataset_name>/nnUNetTrainerMerlin__nnUNetPlans__3d_fullres/
+        
+        ```
+        
+        _(Replace  `<your_nnUNet_folder>`  and  `<dataset_name>`  with your actual paths/names)._
+        
+3.  **Place Dataset Configuration:**
+    
+    -   Make sure you have the  `dataset.json`  file (which describes your dataset for nnU-Net).
+        
+    -   Place a copy of this  `dataset.json`  file inside your nnU-Net raw data folder for the corresponding dataset:
+        
+        ```
+        <your_nnUNet_folder>/nnUNet_raw/<dataset_name>/dataset.json
+        
+        ```        
+
+## Inference
+
+Use the following script to run inference on your images:
+
+Bash
+
+```
+nnUNetv2_predict -d <dataset_name> -tr nnUNetTrainerMerlin -i <images_directory> -o <output_directory> -f 0 -c 3d_fullres
+
+```
+
+**Arguments:**
+
+-   `-d <dataset_name>`: The name of your dataset (matching the folder names used in setup).
+    
+-   `-tr nnUNetTrainerMerlin`: Specifies that the custom Merlin trainer should be used.
+    
+-   `-i <images_directory>`: Path to the directory containing the input image files.
+    
+-   `-o <output_directory>`: Path where the segmentation masks will be saved.
+    
+-   `-f 0`: Specifies using fold 0 (as provided in the pre-trained model).
+    
+-   `-c 3d_fullres`: Specifies using the 3D full-resolution configuration.
+    
+
+----------
+
+## General nnU-Net Usage
+
+For general instructions on installation, preparing data, training, and other nnU-Net functionalities, please refer to the official nnU-Net documentation or the remainder of the original README file below.
+
 # Welcome to the new nnU-Net!
 
 Click [here](https://github.com/MIC-DKFZ/nnUNet/tree/nnunetv1) if you were looking for the old one instead.
