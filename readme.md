@@ -42,10 +42,15 @@ pip install -e .
         ```
         <your_nnUNet_folder>/nnUNet_raw/<dataset_name>/dataset.json
         
-        ```        
+        ```
+        
+4. **Pre-process scans**
+
+    -    Preprocess your `images*` folders with the [Merlin transforms](https://github.com/StanfordMIMI/Merlin/blob/02c1e05a484a6e8f0949d4fab8a2edf7e7cdf012/merlin/data/monai_transforms.py#L13). 
+    
+    -    Save the transformed image as a NIfTI in the `images*` directories. 
 
 ## Inference
-
 Use the following script to run inference on your images:
 
 Bash
