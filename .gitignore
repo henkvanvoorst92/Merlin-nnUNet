@@ -114,4 +114,7 @@ ENV/
 *.model
 *.pt
 
+./nnunetv2/training/nnUNetTrainer/variants/network_architecture/models/i3_resnet_clinical_longformer_best_clip_04-02-2024_23-21-36_epoch_99.pt
+./nnunetv2/training/nnUNetTrainer/variants/network_architecture/models/.cache
+
 !documentation/assets/scribble_example.png

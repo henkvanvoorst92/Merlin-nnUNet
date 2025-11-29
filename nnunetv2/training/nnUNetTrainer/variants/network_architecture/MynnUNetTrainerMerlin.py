@@ -4,7 +4,7 @@ from torch import nn
 import torch
 
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
-from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models.MynnUNetTrainer import MynnUNetTrainer
+from nnunetv2.training.nnUNetTrainer.variants.network_architecture.MynnUNetTrainer import MynnUNetTrainer
 from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models import clip_model_3d
 from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models import unet_decoder
 
@@ -33,13 +33,12 @@ class MynnUNetTrainerMerlin(MynnUNetTrainer):
         fold: int,
         dataset_json: dict,
         unpack_dataset: bool = True,
-        model_addname: str = "",
+        model_addname: str = None,
         device: torch.device = torch.device("cuda"),
     ):
-        super().__init__(plans, configuration, fold, dataset_json, unpack_dataset, device)
+        super().__init__(plans, configuration, fold, dataset_json, unpack_dataset, model_addname, device)
         
         print(self.configuration_manager)
-        
     
     @staticmethod
     def build_network_architecture(architecture_class_name: str,

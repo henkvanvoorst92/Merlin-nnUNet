@@ -28,12 +28,51 @@ def find_free_network_port() -> int:
     s.close()
     return port
 
+#
+# def get_trainer_from_args(dataset_name_or_id: Union[int, str],
+#                           configuration: str,
+#                           fold: int,
+#                           trainer_name: str = 'nnUNetTrainer',
+#                           plans_identifier: str = 'nnUNetPlans',
+#                           device: torch.device = torch.device('cuda')):
+#     # load nnunet class and do sanity checks
+#     nnunet_trainer = recursive_find_python_class(join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),
+#                                                 trainer_name, 'nnunetv2.training.nnUNetTrainer')
+#     if nnunet_trainer is None:
+#         raise RuntimeError(f'Could not find requested nnunet trainer {trainer_name} in '
+#                            f'nnunetv2.training.nnUNetTrainer ('
+#                            f'{join(nnunetv2.__path__[0], "training", "nnUNetTrainer")}). If it is located somewhere '
+#                            f'else, please move it there.')
+#     assert issubclass(nnunet_trainer, nnUNetTrainer), 'The requested nnunet trainer class must inherit from ' \
+#                                                     'nnUNetTrainer'
+#
+#     # handle dataset input. If it's an ID we need to convert to int from string
+#     if dataset_name_or_id.startswith('Dataset'):
+#         pass
+#     else:
+#         try:
+#             dataset_name_or_id = int(dataset_name_or_id)
+#         except ValueError:
+#             raise ValueError(f'dataset_name_or_id must either be an integer or a valid dataset name with the pattern '
+#                              f'DatasetXXX_YYY where XXX are the three(!) task ID digits. Your '
+#                              f'input: {dataset_name_or_id}')
+#
+#     # initialize nnunet trainer
+#     preprocessed_dataset_folder_base = join(nnUNet_preprocessed, maybe_convert_to_dataset_name(dataset_name_or_id))
+#     plans_file = join(preprocessed_dataset_folder_base, plans_identifier + '.json')
+#     plans = load_json(plans_file)
+#     dataset_json = load_json(join(preprocessed_dataset_folder_base, 'dataset.json'))
+#     nnunet_trainer = nnunet_trainer(plans=plans, configuration=configuration, fold=fold,
+#                                     dataset_json=dataset_json, device=device)
+#     return nnunet_trainer
 
 def get_trainer_from_args(dataset_name_or_id: Union[int, str],
                           configuration: str,
                           fold: int,
                           trainer_name: str = 'nnUNetTrainer',
                           plans_identifier: str = 'nnUNetPlans',
+                          use_compressed: bool = False,
+                          model_addname="",
                           device: torch.device = torch.device('cuda')):
     # load nnunet class and do sanity checks
     nnunet_trainer = recursive_find_python_class(join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),
@@ -63,9 +102,11 @@ def get_trainer_from_args(dataset_name_or_id: Union[int, str],
     plans = load_json(plans_file)
     dataset_json = load_json(join(preprocessed_dataset_folder_base, 'dataset.json'))
     nnunet_trainer = nnunet_trainer(plans=plans, configuration=configuration, fold=fold,
-                                    dataset_json=dataset_json, device=device)
+                                    dataset_json=dataset_json,
+                                    unpack_dataset=not use_compressed,
+                                    model_addname=model_addname,
+                                    device=device)
     return nnunet_trainer
-
 
 def maybe_load_checkpoint(nnunet_trainer: nnUNetTrainer, continue_training: bool, validation_only: bool,
                           pretrained_weights_file: str = None):
@@ -196,7 +237,7 @@ def run_training(dataset_name_or_id: Union[str, int],
                  join=True)
     else:
         nnunet_trainer = get_trainer_from_args(dataset_name_or_id, configuration, fold, trainer_class_name,
-                                               plans_identifier, use_compressed_data) # , # model_addname, device=device)
+                                               plans_identifier, use_compressed_data, model_addname, device=device)
 
         if 'My' in trainer_class_name:
             nnunet_trainer.add_args(args)
