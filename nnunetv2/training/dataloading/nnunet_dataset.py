@@ -10,6 +10,7 @@ import blosc2
 import shutil
 from blosc2 import Filter, Codec
 
+from nnunetv2.training.dataloading.utils import get_case_identifiers
 from batchgenerators.utilities.file_and_folder_operations import join, load_pickle, isfile, write_pickle, subfiles
 from nnunetv2.configuration import default_num_processes
 from nnunetv2.training.dataloading.utils import unpack_dataset
