@@ -336,6 +336,9 @@ def init_args(args=None):
     parser.add_argument('--model_addname', default=None, type=str, required=False,
                         help='for similar experiments on same adata provide different model_addname to create separate model folder (with folds init)')
 
+    parser.add_argument('--init_lr', default=None, type=str, required=False,
+                        help='For finetuning use lower initial learning rate (Merline: 1e-5)')
+
     if is_notebook():
         print("Detected notebook environment, using default argument values.")
         return parser.parse_args([])

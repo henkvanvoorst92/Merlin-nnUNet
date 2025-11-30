@@ -70,7 +70,7 @@ class MynnUNetTrainerMerlin(MynnUNetTrainer):
         model = model.encode_image
         decoder = unet_decoder.UNetDecoder(num_classes=num_output_channels, deep_supervision=enable_deep_supervision)
         model = torch.nn.Sequential(model, decoder)
-        #
+
         # for name, param in model.named_parameters():
         #     print(name)
 
