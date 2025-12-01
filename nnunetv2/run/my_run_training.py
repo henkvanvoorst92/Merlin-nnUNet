@@ -104,8 +104,9 @@ def get_trainer_from_args(dataset_name_or_id: Union[int, str],
     nnunet_trainer = nnunet_trainer(plans=plans, configuration=configuration, fold=fold,
                                     dataset_json=dataset_json,
                                     unpack_dataset=not use_compressed,
+                                    device=device,
                                     model_addname=model_addname,
-                                    device=device)
+                                    )
     return nnunet_trainer
 
 def maybe_load_checkpoint(nnunet_trainer: nnUNetTrainer, continue_training: bool, validation_only: bool,

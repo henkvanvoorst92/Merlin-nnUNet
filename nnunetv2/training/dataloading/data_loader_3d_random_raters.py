@@ -1,10 +1,12 @@
 import numpy as np
-from nnunetv2.training.dataloading.base_data_loader import nnUNetDataLoaderBase
+import torch
+from threadpoolctl import threadpool_limits
+#from nnunetv2.training.dataloading.base_data_loader import nnUNetDataLoaderBase
 from nnunetv2.training.dataloading.nnunet_dataset import nnUNetDataset
 from typing import Union, List, Tuple
-from batchgenerators.dataloading.data_loader import DataLoader
+from nnunetv2.training.dataloading.data_loader import nnUNetDataLoader
 
-class nnUNetDataLoader3D_channel_sampler(nnUNetDataLoaderBase):
+class nnUNetDataLoader3D_channel_sampler(nnUNetDataLoader):
     def __init__(self,
                  data: nnUNetDataset,
                  batch_size: int,
@@ -15,14 +17,16 @@ class nnUNetDataLoader3D_channel_sampler(nnUNetDataLoaderBase):
                  sampling_probabilities: Union[List[int], Tuple[int, ...], np.ndarray] = None,
                  pad_sides: Union[List[int], Tuple[int, ...], np.ndarray] = None,
                  probabilistic_oversampling: bool = False,
+                 transforms=None,
                  multichannel_val_loader=False,
                  img_gt_sampling_strategy=(False,False,False, None, None, None)):
+
         super().__init__(data=data, batch_size=batch_size, patch_size=patch_size,
                          final_patch_size=final_patch_size,label_manager=label_manager,
                          oversample_foreground_percent=oversample_foreground_percent,
                          sampling_probabilities=sampling_probabilities,
-                         pad_sides=pad_sides, probabilistic_oversampling=probabilistic_oversampling)
-
+                         pad_sides=pad_sides, probabilistic_oversampling=probabilistic_oversampling,
+                         transforms=transforms)
 
         self.random_gt_sampling, self.random_img_sampling, self.random_gt_img_sampling, self.ix_seg, self.ix_img, self.possible_channels = img_gt_sampling_strategy
         #self.random_gt_sampling: samples ground truth from channel
@@ -36,7 +40,12 @@ class nnUNetDataLoader3D_channel_sampler(nnUNetDataLoaderBase):
     #changed because shape should be different
     def my_determine_shapes(self):
 
-        data, seg, properties = self._data.load_case(self.indices[0])
+        example = self._data.load_case(self.indices[0])
+        if len(example)==3:
+            data, seg, properties = example
+        elif len(example)==4:
+            data, seg, properties, sitk_stuff = example
+
         if self.random_gt_sampling:
             num_color_channels = data.shape[0] #only for multichannel training
         elif self.random_img_sampling or self.random_gt_img_sampling:
@@ -65,8 +74,11 @@ class nnUNetDataLoader3D_channel_sampler(nnUNetDataLoaderBase):
             # (Lung for example)
             force_fg = self.get_do_oversample(j)
 
-            data, seg, properties = self._data.load_case(i)
-
+            case = self._data.load_case(i)
+            if len(case) == 3:
+                data, seg, properties = case
+            elif len(case) == 4:
+                data, seg, __, properties = case
 
             #define what channels should be get
             d_chans = np.arange(data.shape[0]) if self.possible_channels is None else np.array(self.possible_channels)
@@ -140,7 +152,11 @@ class nnUNetDataLoader3D_channel_sampler(nnUNetDataLoaderBase):
             # (Lung for example)
             force_fg = self.get_do_oversample(j)
 
-            data, seg, properties = self._data.load_case(i)
+            case = self._data.load_case(i)
+            if len(case) == 3:
+                data, seg, properties = case
+            elif len(case) == 4:
+                data, seg, __, properties = case
 
             #sample index
             if len(data.shape)>3 or len(seg.shape)>3:
@@ -179,6 +195,7 @@ class nnUNetDataLoader3D_channel_sampler(nnUNetDataLoaderBase):
                     select_coords = coords[:,0]==ix_seg
                     properties['class_locations'][1] = coords[select_coords]
 
+
             case_properties.append(properties)
 
             # If we are doing the cascade then the segmentation from the previous stage will already have been loaded by
@@ -209,7 +226,27 @@ class nnUNetDataLoader3D_channel_sampler(nnUNetDataLoaderBase):
             data_all[j] = np.pad(data, padding, 'constant', constant_values=0)
             seg_all[j] = np.pad(seg, padding, 'constant', constant_values=-1)
 
-        return {'data': data_all, 'seg': seg_all, 'properties': case_properties, 'keys': selected_keys}
+        #{'data': data_all, 'seg': seg_all, 'properties': case_properties, 'keys': selected_keys}
+        if self.transforms is not None:
+            with torch.no_grad():
+                with threadpool_limits(limits=1, user_api=None):
+                    data_all = torch.from_numpy(data_all).float()
+                    seg_all = torch.from_numpy(seg_all).to(torch.int16)
+                    images = []
+                    segs = []
+                    for b in range(self.batch_size):
+                        tmp = self.transforms(**{'image': data_all[b], 'segmentation': seg_all[b]})
+                        images.append(tmp['image'])
+                        segs.append(tmp['segmentation'])
+                    data_all = torch.stack(images)
+                    if isinstance(segs[0], list):
+                        seg_all = [torch.stack([s[i] for s in segs]) for i in range(len(segs[0]))]
+                    else:
+                        seg_all = torch.stack(segs)
+                    del segs, images
+            return {'data': data_all, 'target': seg_all, 'keys': selected_keys}
+
+        return {'data': data_all, 'target': seg_all, 'keys': selected_keys}
 
     def generate_train_batch(self):
         selected_keys = self.get_indices()
@@ -227,5 +264,5 @@ class nnUNetDataLoader3D_channel_sampler(nnUNetDataLoaderBase):
 if __name__ == '__main__':
     folder = '/media/fabian/data/nnUNet_preprocessed/Dataset002_Heart/3d_fullres'
     ds = nnUNetDataset(folder, 0)  # this should not load the properties!
-    dl = nnUNetDataLoader3D(ds, 5, (16, 16, 16), (16, 16, 16), 0.33, None, None)
+    #dl = nnUNetDataLoader3D(ds, 5, (16, 16, 16), (16, 16, 16), 0.33, None, None)
     a = next(dl)
