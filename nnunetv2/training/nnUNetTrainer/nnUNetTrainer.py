@@ -66,7 +66,6 @@ from nnunetv2.utilities.helpers import empty_cache, dummy_context
 from nnunetv2.utilities.label_handling.label_handling import convert_labelmap_to_one_hot, determine_num_input_channels
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 
-
 class nnUNetTrainer(object):
     def __init__(self, plans: dict, configuration: str, fold: int, dataset_json: dict,
                  device: torch.device = torch.device('cuda')):
@@ -120,6 +119,9 @@ class nnUNetTrainer(object):
         self.configuration_name = configuration
         self.dataset_json = dataset_json
         self.fold = fold
+
+        self.n_grad_accum = 1 #if >0 every nth step backprop of accumulated grads is performed
+        self.n_accumulated_grads = 0 #traces number of accumulated gradients
 
         ### Setting all the folder names. We need to make sure things don't crash in case we are just running
         # inference and some of the folders may not be defined!
@@ -216,7 +218,7 @@ class nnUNetTrainer(object):
                 self.num_input_channels,
                 self.label_manager.num_segmentation_heads,
                 self.enable_deep_supervision
-            ).to(self.device)
+            ).to(self.device, dtype=torch.float16) #
             # compile network for free speedup
             if self._do_i_compile():
                 self.print_to_log_file('Using torch.compile...')
@@ -983,26 +985,38 @@ class nnUNetTrainer(object):
         else:
             target = target.to(self.device, non_blocking=True)
 
-        self.optimizer.zero_grad(set_to_none=True)
+        if self.n_grad_accum==self.n_accumulated_grads:
+            self.optimizer.zero_grad(set_to_none=True)
+
         # Autocast can be annoying
         # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
         # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
         # So autocast will only be active if we have a cuda device.
-        with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
+        with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context(): #dtype=torch.float16
             output = self.network(data)
             # del data
-            l = self.loss(output, target)
+            if self.n_grad_accum==0 or (self.n_grad_accum>1 and self.n_accumulated_grads==1):
+                l = self.loss(output, target) / self.n_grad_accum
+                self.n_accumulated_grads+=1
+            else:
+                l += self.loss(output, target) / self.n_grad_accum
+                self.n_accumulated_grads+=1
 
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
-            self.grad_scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
-            self.grad_scaler.step(self.optimizer)
-            self.grad_scaler.update()
+            if self.n_accumulated_grads % self.n_grad_accum == 0:
+                self.grad_scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                self.grad_scaler.step(self.optimizer)
+                self.grad_scaler.update()
+                self.n_accumulated_grads = 0
         else:
             l.backward()
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
-            self.optimizer.step()
+            if self.n_accumulated_grads % self.n_grad_accum == 0:
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                self.optimizer.step()
+                self.n_accumulated_grads = 0
+
         return {'loss': l.detach().cpu().numpy()}
 
     def on_train_epoch_end(self, train_outputs: List[dict]):
@@ -1034,7 +1048,7 @@ class nnUNetTrainer(object):
         # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
         # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
         # So autocast will only be active if we have a cuda device.
-        with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
+        with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context(): #dtype=torch.float16
             output = self.network(data)
             del data
             l = self.loss(output, target)
@@ -1052,13 +1066,13 @@ class nnUNetTrainer(object):
         else:
             # no need for softmax
             output_seg = output.argmax(1)[:, None]
-            predicted_segmentation_onehot = torch.zeros(output.shape, device=output.device, dtype=torch.float32)
+            predicted_segmentation_onehot = torch.zeros(output.shape, device=output.device, dtype=torch.float16)
             predicted_segmentation_onehot.scatter_(1, output_seg, 1)
             del output_seg
 
         if self.label_manager.has_ignore_label:
             if not self.label_manager.has_regions:
-                mask = (target != self.label_manager.ignore_label).float()
+                mask = (target != self.label_manager.ignore_label).to(torch.float16)
                 # CAREFUL that you don't rely on target after this line!
                 target[target == self.label_manager.ignore_label] = 0
             else:

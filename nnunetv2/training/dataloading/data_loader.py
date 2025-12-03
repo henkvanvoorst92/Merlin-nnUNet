@@ -199,7 +199,7 @@ class nnUNetDataLoader(DataLoader):
         if self.transforms is not None:
             with torch.no_grad():
                 with threadpool_limits(limits=1, user_api=None):
-                    data_all = torch.from_numpy(data_all).float()
+                    data_all = torch.from_numpy(data_all)
                     seg_all = torch.from_numpy(seg_all).to(torch.int16)
                     images = []
                     segs = []

@@ -339,6 +339,10 @@ def init_args(args=None):
 
     parser.add_argument('--init_lr', default=None, type=str, required=False,
                         help='For finetuning use lower initial learning rate (Merline: 1e-5)')
+    parser.add_argument('--freeze_encoder', default=False, type=bool, required=False,
+                        help='option to not optimize merlin encoder weights but solely focus on decoder finetuning')
+    parser.add_argument('--n_grad_accum', default=1, type=int, required=False,
+                        help='If >1 accumulates gradients every n training steps before performing an optimizer step')
 
     if is_notebook():
         print("Detected notebook environment, using default argument values.")

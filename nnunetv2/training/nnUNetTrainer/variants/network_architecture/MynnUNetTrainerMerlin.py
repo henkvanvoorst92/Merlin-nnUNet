@@ -51,6 +51,7 @@ class MynnUNetTrainerMerlin(nnUNetTrainer):
         self.save_checkpoint_list = [] #--> store these checkpoints for analyses
         self.weight_ctline_dice_loss = 0.0 #-->
         self.adjusted_sampling = False
+        self.freeze_encoder = False
 
         if model_addname is None:
             self.output_folder_base = join(nnUNet_results, self.plans_manager.dataset_name,
@@ -63,8 +64,9 @@ class MynnUNetTrainerMerlin(nnUNetTrainer):
 
         self.output_folder = join(self.output_folder_base, f'fold_{fold}')
     
-    @staticmethod
-    def build_network_architecture(architecture_class_name: str,
+    #@staticmethod
+    def build_network_architecture(self,
+                                   architecture_class_name: str,
                                    arch_init_kwargs: dict,
                                    arch_init_kwargs_req_import: Union[List[str], Tuple[str, ...]],
                                    num_input_channels: int,
@@ -91,6 +93,11 @@ class MynnUNetTrainerMerlin(nnUNetTrainer):
         print("Unexpected keys: ", unexpected)
 
         model = model.encode_image
+        #freeze encoder parameters weights
+        if self.freeze_encoder:
+            for name, param in model.named_parameters():
+                param.requires_grad = False
+
         decoder = unet_decoder.UNetDecoder(num_classes=num_output_channels, deep_supervision=enable_deep_supervision)
         model = torch.nn.Sequential(model, decoder)
 
@@ -125,6 +132,17 @@ class MynnUNetTrainerMerlin(nnUNetTrainer):
                                           ix_seg, ix_img, possible_channels)
         self.adjusted_sampling = any(self.img_gt_sampling_strategy[:3]) or ix_seg is not None or ix_img is not None
         self.num_epochs = int(args.num_epochs)
+
+        #add learning rate
+        if hasattr(args, 'init_lr'):
+            if args.init_lr is not None:
+                self.initial_lr = args.init_lr
+
+        #for pretrained option to freeze encoder weights (Merlin)
+        self.freeze_encoder = args.freeze_encoder if hasattr(args, 'freeze_encoder') else False
+
+        #only for each n_grad_accum the optimizer is optimized (virtually increasing batch size without VRAM overload)
+        self.n_grad_accum = args.n_grad_accum if hasattr(args, 'n_grad_accum') else 1
 
     def get_dataloaders(self):
         if self.dataset_class is None:
