@@ -7,6 +7,7 @@ import os, sys
 mednext_path = os.path.join(os.path.dirname(os.getcwd()), 'MedNeXt')
 if not os.path.exists(mednext_path):
     mednext_path = os.getenv('MEDNEXT_PATH')
+
 sys.path.append(mednext_path)
 from nnunet_mednext import create_mednext_v1
 
