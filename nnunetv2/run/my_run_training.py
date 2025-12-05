@@ -322,6 +322,13 @@ def init_args(args=None):
                         help='[OPTIONAL] Stores multiple checkpoints when training for later analyses') #pm change to parse list here
     parser.add_argument('--w_cldc', default=0.0, type=float, required=False,
                         help='[OPTIONAL] Weight of the centerline dice loss, if >0 uses centerline dice when training')
+
+    parser.add_argument('--num_epochs', default=1000,
+                        help='[OPTIONAL] Sample ground truth from multi-channel ground truth input label image')
+
+    parser.add_argument('--model_addname', default=None, type=str, required=False,
+                        help='for similar experiments on same adata provide different model_addname to create separate model folder (with folds init)')
+
     parser.add_argument('--random_gt_sampling', action='store_true', required=False,
                         help='[OPTIONAL] Sample ground truth from multi-channel ground truth input label image')
     parser.add_argument('--random_img_sampling', action='store_true', required=False,
@@ -331,11 +338,6 @@ def init_args(args=None):
     parser.add_argument('--possible_channels', nargs='+', default=None, type=int, required=False,
                         help='what channels to use during training (if multichannel images loaded for channel sampling)')
 
-    parser.add_argument('--num_epochs', default=1000,
-                        help='[OPTIONAL] Sample ground truth from multi-channel ground truth input label image')
-
-    parser.add_argument('--model_addname', default=None, type=str, required=False,
-                        help='for similar experiments on same adata provide different model_addname to create separate model folder (with folds init)')
 
     parser.add_argument('--init_lr', default=None, type=str, required=False,
                         help='For finetuning use lower initial learning rate (Merline: 1e-5)')
