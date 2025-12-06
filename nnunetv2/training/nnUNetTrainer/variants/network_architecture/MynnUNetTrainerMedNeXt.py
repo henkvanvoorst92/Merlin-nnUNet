@@ -13,6 +13,7 @@ from nnunet_mednext import create_mednext_v1
 
 from huggingface_hub import hf_hub_download
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+from nnunetv2.training.lr_scheduler.polylr import PolyLRScheduler
 #from nnunetv2.training.nnUNetTrainer.variants.network_architecture.MynnUNetTrainer import MynnUNetTrainer
 from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models import clip_model_3d
 from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models import unet_decoder
@@ -109,13 +110,13 @@ class MynnUNetTrainerMedNeXt(nnUNetTrainer):
         #add learning rate
         if hasattr(args, 'init_lr'):
             if args.init_lr is not None:
-                self.initial_lr = args.init_lr
+                self.initial_lr = float(args.init_lr)
 
         #for pretrained option to freeze encoder weights (Merlin)
         self.freeze_encoder = args.freeze_encoder if hasattr(args, 'freeze_encoder') else False
 
         #only for each n_grad_accum the optimizer is optimized (virtually increasing batch size without VRAM overload)
-        self.n_grad_accum = args.n_grad_accum if hasattr(args, 'n_grad_accum') else 1
+        self.n_grad_accum = torch.tensor(args.n_grad_accum if hasattr(args, 'n_grad_accum') else 1)
 
     def get_dataloaders(self):
         if self.dataset_class is None:
@@ -233,3 +234,12 @@ class MynnUNetTrainerMedNeXt(nnUNetTrainer):
         _ = next(mt_gen_val)
 
         return mt_gen_train, mt_gen_val
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(
+            self.network.parameters(),
+            lr=self.initial_lr,
+            weight_decay=self.weight_decay
+        )
+        lr_scheduler = PolyLRScheduler(optimizer, self.initial_lr, self.num_epochs)
+        return optimizer, lr_scheduler

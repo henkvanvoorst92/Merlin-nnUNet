@@ -2,8 +2,10 @@ from typing import Union, Tuple, List
 from torch import nn
 import torch
 import os
+from torch import autocast
 from huggingface_hub import hf_hub_download
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+from nnunetv2.utilities.helpers import dummy_context
 #from nnunetv2.training.nnUNetTrainer.variants.network_architecture.MynnUNetTrainer import MynnUNetTrainer
 from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models import clip_model_3d
 from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models import unet_decoder
@@ -136,13 +138,13 @@ class MynnUNetTrainerMerlin(nnUNetTrainer):
         #add learning rate
         if hasattr(args, 'init_lr'):
             if args.init_lr is not None:
-                self.initial_lr = args.init_lr
+                self.initial_lr = float(args.init_lr)
 
         #for pretrained option to freeze encoder weights (Merlin)
         self.freeze_encoder = args.freeze_encoder if hasattr(args, 'freeze_encoder') else False
 
         #only for each n_grad_accum the optimizer is optimized (virtually increasing batch size without VRAM overload)
-        self.n_grad_accum = args.n_grad_accum if hasattr(args, 'n_grad_accum') else 1
+        self.n_grad_accum = torch.tensor(args.n_grad_accum if hasattr(args, 'n_grad_accum') else 1)
 
     def get_dataloaders(self):
         if self.dataset_class is None:
@@ -260,3 +262,54 @@ class MynnUNetTrainerMerlin(nnUNetTrainer):
         _ = next(mt_gen_val)
 
         return mt_gen_train, mt_gen_val
+
+    def train_step(self, batch: dict) -> dict:
+        data = batch['data']
+        target = batch['target']
+
+        data = data.to(self.device, non_blocking=True)
+        if isinstance(target, list):
+            target = [i.to(self.device, non_blocking=True) for i in target]
+        else:
+            target = target.to(self.device, non_blocking=True)
+
+        #self.n_grad_accum = self.n_grad_accum.to(self.device)
+        #self.n_accumulated_grads = self.n_accumulated_grads.to(self.device)
+
+        if self.n_accumulated_grads==0:
+            self.optimizer.zero_grad(set_to_none=True)
+            #print('Optim zero grad')
+
+        # Autocast can be annoying
+        # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
+        # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
+        # So autocast will only be active if we have a cuda device.
+        with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context(): #
+            output = self.network(data)
+            del data
+            cur_loss = self.loss(output, target)
+            if (self.n_grad_accum > 1):
+                l = cur_loss / self.n_grad_accum
+            else:
+                l = cur_loss
+
+            self.n_accumulated_grads+=1
+
+        if self.grad_scaler is not None:
+            self.grad_scaler.scale(l).backward()
+            if self.n_accumulated_grads % self.n_grad_accum == 0:
+                #print('Backprop')
+                self.grad_scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                self.grad_scaler.step(self.optimizer)
+                self.grad_scaler.update()
+                self.n_accumulated_grads = 0
+        else:
+            l.backward()
+            if self.n_accumulated_grads % self.n_grad_accum == 0:
+                #print('Backprop')
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                self.optimizer.step()
+                self.n_accumulated_grads = 0
+
+        return {'loss': l.detach().cpu().numpy()}

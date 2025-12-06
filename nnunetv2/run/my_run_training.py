@@ -339,7 +339,7 @@ def init_args(args=None):
                         help='what channels to use during training (if multichannel images loaded for channel sampling)')
 
 
-    parser.add_argument('--init_lr', default=None, type=str, required=False,
+    parser.add_argument('--init_lr', default=None, type=float, required=False,
                         help='For finetuning use lower initial learning rate (Merline: 1e-5)')
     parser.add_argument('--freeze_encoder', default=False, type=bool, required=False,
                         help='option to not optimize merlin encoder weights but solely focus on decoder finetuning')
