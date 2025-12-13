@@ -66,8 +66,21 @@ class MynnUNetTrainerCTFM(nnUNetTrainer):
             "project-lighter/ct_fm_segresnet"
             )
 
-        pretrained.encoder.conv_init.in_channels = num_input_channels
-        pretrained.up_layers[-1].head.out_channels = num_output_channels
+        if pretrained.encoder.conv_init.in_channels!=num_input_channels:
+            pretrained.encoder.conv_init.in_channels = num_input_channels
+            new_w = torch.stack([torch.clone(pretrained.encoder.conv_init.weight[0]) for i in range(num_output_channels)], dim=0)
+            new_b = torch.stack([torch.clone(pretrained.encoder.conv_init.bias[0]) for i in range(num_output_channels)], dim=0)
+
+            pretrained.encoder.conv_init.weight = nn.Parameter(new_w)
+            pretrained.encoder.conv_init.bias = nn.Parameter(new_b)
+
+        if pretrained.up_layers[-1].head.out_channels!=num_output_channels:
+            pretrained.up_layers[-1].head.out_channels = num_output_channels
+            new_w = torch.stack([torch.clone(pretrained.up_layers[-1].head.weight[0]) for i in range(num_output_channels)], dim=0)
+            new_b = torch.stack([torch.clone(pretrained.up_layers[-1].head.bias[0]) for i in range(num_output_channels)], dim=0)
+
+            pretrained.up_layers[-1].head.weight = nn.Parameter(new_w)
+            pretrained.up_layers[-1].head.bias = nn.Parameter(new_b)
 
         model = SegResNet(
             in_channels=num_input_channels,  # set this to what your data uses
