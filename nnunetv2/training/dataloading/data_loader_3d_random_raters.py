@@ -138,7 +138,26 @@ class nnUNetDataLoader3D_channel_sampler(nnUNetDataLoader):
                 new_selected_keys.append(i)
                 ix_count += 1
 
-        return {'data': data_all, 'seg': seg_all, 'properties': case_properties, 'keys': np.array(new_selected_keys)}
+            if self.transforms is not None:
+                with torch.no_grad():
+                    with threadpool_limits(limits=1, user_api=None):
+                        data_all = torch.from_numpy(data_all).float()
+                        seg_all = torch.from_numpy(seg_all).to(torch.int16)
+                        images = []
+                        segs = []
+                        for b in range(self.batch_size):
+                            tmp = self.transforms(**{'image': data_all[b], 'segmentation': seg_all[b]})
+                            images.append(tmp['image'])
+                            segs.append(tmp['segmentation'])
+                        data_all = torch.stack(images)
+                        if isinstance(segs[0], list):
+                            seg_all = [torch.stack([s[i] for s in segs]) for i in range(len(segs[0]))]
+                        else:
+                            seg_all = torch.stack(segs)
+                        del segs, images
+                return {'data': data_all, 'target': seg_all, 'keys': selected_keys}
+
+        return {'data': data_all, 'target': seg_all, 'properties': case_properties, 'keys': np.array(new_selected_keys)}
 
 
     def multichannel_train_sampling(self, selected_keys):

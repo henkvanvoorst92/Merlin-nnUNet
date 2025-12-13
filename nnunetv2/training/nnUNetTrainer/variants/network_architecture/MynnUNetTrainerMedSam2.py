@@ -1,14 +1,12 @@
 from typing import Union, Tuple, List
 from torch import nn
 import torch
-import os, sys
-
+import os
+from torch import autocast
 from huggingface_hub import hf_hub_download
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
-from nnunetv2.training.lr_scheduler.polylr import PolyLRScheduler
-#from nnunetv2.training.nnUNetTrainer.variants.network_architecture.MynnUNetTrainer import MynnUNetTrainer
-from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models import clip_model_3d
-from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models import unet_decoder
+from nnunetv2.utilities.helpers import dummy_context
+
 from batchgenerators.utilities.file_and_folder_operations import join
 from nnunetv2.paths import nnUNet_preprocessed, nnUNet_results
 from nnunetv2.training.dataloading.data_loader import nnUNetDataLoader
@@ -21,8 +19,7 @@ from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
 
 from nnunetv2.training.dataloading.data_loader_3d_random_raters import nnUNetDataLoader3D_channel_sampler
 
-#not working right now
-class MynnUNetTrainerMedNeXt(nnUNetTrainer):
+class MynnUNetTrainerMedSam2(nnUNetTrainer):
     def __init__(
         self,
         plans: dict,
@@ -54,8 +51,8 @@ class MynnUNetTrainerMedNeXt(nnUNetTrainer):
 
         self.output_folder = join(self.output_folder_base, f'fold_{fold}')
     
-    @staticmethod
-    def build_network_architecture(
+    #@staticmethod
+    def build_network_architecture(self,
                                    architecture_class_name: str,
                                    arch_init_kwargs: dict,
                                    arch_init_kwargs_req_import: Union[List[str], Tuple[str, ...]],
@@ -63,21 +60,11 @@ class MynnUNetTrainerMedNeXt(nnUNetTrainer):
                                    num_output_channels: int,
                                    enable_deep_supervision: bool = True) -> nn.Module:
 
-        # add Mednext import
-        mednext_path = os.path.join(os.path.dirname(os.getcwd()), 'MedNeXt')
-        if not os.path.exists(mednext_path):
-            mednext_path = os.getenv('MEDNEXT_PATH')
+        file_path = hf_hub_download(repo_id="wanglab/MedSAM2", filename="MedSAM2_latest.pt")
+        checkpoint = torch.load(file_path)
 
-        sys.path.append(mednext_path)
-        from nnunet_mednext import create_mednext_v1
 
-        model = create_mednext_v1(
-                      num_input_channels = num_input_channels,
-                      num_classes = num_output_channels,
-                      model_id = arch_init_kwargs['model_id'], # S, B, M and L are valid model ids
-                      kernel_size = arch_init_kwargs['kernel_size'],  # 3x3x3 and 5x5x5 were tested in publication
-                      deep_supervision = True     # was used in publication
-                    )
+
         return model
 
     def set_deep_supervision_enabled(self, enabled: bool):
@@ -235,11 +222,53 @@ class MynnUNetTrainerMedNeXt(nnUNetTrainer):
 
         return mt_gen_train, mt_gen_val
 
-    def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            self.network.parameters(),
-            lr=self.initial_lr,
-            weight_decay=self.weight_decay
-        )
-        lr_scheduler = PolyLRScheduler(optimizer, self.initial_lr, self.num_epochs)
-        return optimizer, lr_scheduler
+    def train_step(self, batch: dict) -> dict:
+        data = batch['data']
+        target = batch['target']
+
+        data = data.to(self.device, non_blocking=True)
+        if isinstance(target, list):
+            target = [i.to(self.device, non_blocking=True) for i in target]
+        else:
+            target = target.to(self.device, non_blocking=True)
+
+        #self.n_grad_accum = self.n_grad_accum.to(self.device)
+        #self.n_accumulated_grads = self.n_accumulated_grads.to(self.device)
+
+        if self.n_accumulated_grads==0:
+            self.optimizer.zero_grad(set_to_none=True)
+            #print('Optim zero grad')
+
+        # Autocast can be annoying
+        # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
+        # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
+        # So autocast will only be active if we have a cuda device.
+        with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context(): #
+            output = self.network(data)
+            del data
+            cur_loss = self.loss(output, target)
+            if (self.n_grad_accum > 1):
+                l = cur_loss / self.n_grad_accum
+            else:
+                l = cur_loss
+
+            self.n_accumulated_grads+=1
+
+        if self.grad_scaler is not None:
+            self.grad_scaler.scale(l).backward()
+            if self.n_accumulated_grads % self.n_grad_accum == 0:
+                #print('Backprop')
+                self.grad_scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                self.grad_scaler.step(self.optimizer)
+                self.grad_scaler.update()
+                self.n_accumulated_grads = 0
+        else:
+            l.backward()
+            if self.n_accumulated_grads % self.n_grad_accum == 0:
+                #print('Backprop')
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                self.optimizer.step()
+                self.n_accumulated_grads = 0
+
+        return {'loss': l.detach().cpu().numpy()}

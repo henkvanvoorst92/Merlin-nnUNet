@@ -2,13 +2,12 @@ from typing import Union, Tuple, List
 from torch import nn
 import torch
 import os, sys
+from monai.networks.nets import DynUNet
 
 from huggingface_hub import hf_hub_download
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 from nnunetv2.training.lr_scheduler.polylr import PolyLRScheduler
-#from nnunetv2.training.nnUNetTrainer.variants.network_architecture.MynnUNetTrainer import MynnUNetTrainer
-from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models import clip_model_3d
-from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models import unet_decoder
+from torch.optim.lr_scheduler import LinearLR
 from batchgenerators.utilities.file_and_folder_operations import join
 from nnunetv2.paths import nnUNet_preprocessed, nnUNet_results
 from nnunetv2.training.dataloading.data_loader import nnUNetDataLoader
@@ -22,7 +21,7 @@ from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
 from nnunetv2.training.dataloading.data_loader_3d_random_raters import nnUNetDataLoader3D_channel_sampler
 
 #not working right now
-class MynnUNetTrainerMedNeXt(nnUNetTrainer):
+class MynnUNetTrainerVesselFM(nnUNetTrainer):
     def __init__(
         self,
         plans: dict,
@@ -31,7 +30,7 @@ class MynnUNetTrainerMedNeXt(nnUNetTrainer):
         dataset_json: dict,
         unpack_dataset: bool = True,
         model_addname: str = None,
-        device: torch.device = torch.device("cuda")
+        device: torch.device = torch.device("cuda"),
     ):
         super().__init__(plans, configuration, fold, dataset_json, model_addname, device)
 
@@ -53,6 +52,13 @@ class MynnUNetTrainerMedNeXt(nnUNetTrainer):
                 if nnUNet_results is not None else None
 
         self.output_folder = join(self.output_folder_base, f'fold_{fold}')
+
+        self.weight_decay = 0.1
+        self.oversample_foreground_percent = 0.33
+        self.probabilistic_oversampling = False
+        self.num_iterations_per_epoch = 250
+        self.num_val_iterations_per_epoch = 50
+        self.num_epochs = 1000
     
     @staticmethod
     def build_network_architecture(
@@ -63,21 +69,18 @@ class MynnUNetTrainerMedNeXt(nnUNetTrainer):
                                    num_output_channels: int,
                                    enable_deep_supervision: bool = True) -> nn.Module:
 
-        # add Mednext import
-        mednext_path = os.path.join(os.path.dirname(os.getcwd()), 'MedNeXt')
-        if not os.path.exists(mednext_path):
-            mednext_path = os.getenv('MEDNEXT_PATH')
 
-        sys.path.append(mednext_path)
-        from nnunet_mednext import create_mednext_v1
+        model = DynUNet(
+            spatial_dims=3,
+            in_channels=num_input_channels,
+            out_channels=num_output_channels,
+            kernel_size=[[3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3]],
+            strides=[[1, 1, 1], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2]],
+            upsample_kernel_size=[[2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2]],
+            filters=[32, 64, 128, 256, 320, 320],
+            res_block=True,
+        )
 
-        model = create_mednext_v1(
-                      num_input_channels = num_input_channels,
-                      num_classes = num_output_channels,
-                      model_id = arch_init_kwargs['model_id'], # S, B, M and L are valid model ids
-                      kernel_size = arch_init_kwargs['kernel_size'],  # 3x3x3 and 5x5x5 were tested in publication
-                      deep_supervision = True     # was used in publication
-                    )
         return model
 
     def set_deep_supervision_enabled(self, enabled: bool):
@@ -117,6 +120,8 @@ class MynnUNetTrainerMedNeXt(nnUNetTrainer):
 
         #only for each n_grad_accum the optimizer is optimized (virtually increasing batch size without VRAM overload)
         self.n_grad_accum = torch.tensor(args.n_grad_accum if hasattr(args, 'n_grad_accum') else 1)
+
+        args.cg
 
     def get_dataloaders(self):
         if self.dataset_class is None:
@@ -241,5 +246,6 @@ class MynnUNetTrainerMedNeXt(nnUNetTrainer):
             lr=self.initial_lr,
             weight_decay=self.weight_decay
         )
-        lr_scheduler = PolyLRScheduler(optimizer, self.initial_lr, self.num_epochs)
+        lr_scheduler = LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=150)
+        #PolyLRScheduler(optimizer, self.initial_lr, self.num_epochs)
         return optimizer, lr_scheduler

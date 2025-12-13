@@ -42,10 +42,10 @@ class MynnUNetTrainerMerlin(nnUNetTrainer):
         fold: int,
         dataset_json: dict,
         unpack_dataset: bool = True,
-        device: torch.device = torch.device("cuda"),
         model_addname: str = None,
+        device: torch.device = torch.device("cuda")
     ):
-        super().__init__(plans, configuration, fold, dataset_json,  device)
+        super().__init__(plans, configuration, fold, dataset_json, model_addname, device)
 
         self.my_init_kwargs['unpack_dataset'] = unpack_dataset
         #new self arguments for training
@@ -102,9 +102,6 @@ class MynnUNetTrainerMerlin(nnUNetTrainer):
 
         decoder = unet_decoder.UNetDecoder(num_classes=num_output_channels, deep_supervision=enable_deep_supervision)
         model = torch.nn.Sequential(model, decoder)
-
-        # for name, param in model.named_parameters():
-        #     print(name)
 
         return model
 

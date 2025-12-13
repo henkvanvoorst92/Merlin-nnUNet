@@ -68,6 +68,7 @@ from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 
 class nnUNetTrainer(object):
     def __init__(self, plans: dict, configuration: str, fold: int, dataset_json: dict,
+                 model_addname: str = None,
                  device: torch.device = torch.device('cuda')):
         # From https://grugbrain.dev/. Worth a read ya big brains ;-)
 
@@ -127,9 +128,16 @@ class nnUNetTrainer(object):
         # inference and some of the folders may not be defined!
         self.preprocessed_dataset_folder_base = join(nnUNet_preprocessed, self.plans_manager.dataset_name) \
             if nnUNet_preprocessed is not None else None
-        self.output_folder_base = join(nnUNet_results, self.plans_manager.dataset_name,
-                                       self.__class__.__name__ + '__' + self.plans_manager.plans_name + "__" + configuration) \
-            if nnUNet_results is not None else None
+
+        if model_addname is None:
+            self.output_folder_base = join(nnUNet_results, self.plans_manager.dataset_name,
+                                           self.__class__.__name__ + '__' + self.plans_manager.plans_name + "__" + configuration) \
+                if nnUNet_results is not None else None
+        else:
+            self.output_folder_base = join(nnUNet_results, self.plans_manager.dataset_name,
+                                           self.__class__.__name__ + model_addname + '__' + self.plans_manager.plans_name + "__" + configuration) \
+                if nnUNet_results is not None else None
+
         self.output_folder = join(self.output_folder_base, f'fold_{fold}')
 
         self.preprocessed_dataset_folder = join(self.preprocessed_dataset_folder_base,
@@ -992,7 +1000,7 @@ class nnUNetTrainer(object):
         # So autocast will only be active if we have a cuda device.
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
-            # del data
+            del data
             l = self.loss(output, target)
 
         if self.grad_scaler is not None:
@@ -1372,6 +1380,9 @@ class nnUNetTrainer(object):
             self.on_epoch_start()
 
             self.on_train_epoch_start()
+
+            #self.validation_step(next(self.dataloader_val))
+
             train_outputs = []
             for batch_id in range(self.num_iterations_per_epoch):
                 train_outputs.append(self.train_step(next(self.dataloader_train)))
