@@ -80,17 +80,17 @@ class MynnUNetTrainerMedSAM2(nnUNetTrainer):
 
 
         medsam2_cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sam2.1_hiera_tiny512_FLARE_RECIST.yaml')
+        medsam2_cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models','sam2', 'configs', 'sam2.1_hiera_t512.yaml' )
+        medsam2_cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'sam2', 'configs', 'sam2.1_hiera_tiny_finetune512.yaml')
         #from nnunetv2.training.nnUNetTrainer.variants.network_architecture.sam2 import SAM2Train
         #in the network_architecture folder all from MedSAM2/training/model/sam2 should be copied
         # (in dataloading sam2_data_utils should come from MedSAM2.training.utils.data_utils.py)
         #reinstantiating using hydra is required for consistency
         cfg = OmegaConf.load(medsam2_cfg_path)
-        model = instantiate(cfg.trainer.model, _recursive_=False)
+        model_cfg = cfg.trainer.model if hasattr(cfg, 'trainer') else cfg.model
+        model = instantiate(model_cfg, _recursive_=False)
 
         model.load_state_dict(checkpoint, strict=False)
-
-
-        print(1)
 
         return model
 

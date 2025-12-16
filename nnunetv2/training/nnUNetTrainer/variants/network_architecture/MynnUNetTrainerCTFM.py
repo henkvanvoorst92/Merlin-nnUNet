@@ -40,6 +40,8 @@ class MynnUNetTrainerCTFM(nnUNetTrainer):
         self.adjusted_sampling = False
         self.freeze_encoder = False
 
+        self.weight_decay = 0.01
+
         if model_addname is None:
             self.output_folder_base = join(nnUNet_results, self.plans_manager.dataset_name,
                                            self.__class__.__name__ + '__' + self.plans_manager.plans_name + "__" + configuration) \
@@ -299,3 +301,12 @@ class MynnUNetTrainerCTFM(nnUNetTrainer):
                 self.n_accumulated_grads = 0
 
         return {'loss': l.detach().cpu().numpy()}
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(
+            self.network.parameters(),
+            lr=self.initial_lr,
+            weight_decay=self.weight_decay
+        )
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.num_epochs)
+        return optimizer, lr_scheduler
