@@ -55,7 +55,9 @@ dependencies = [
     "transformers>=4.38.2",
     "huggingface_hub",
     "monai>=1.3.2",
-    "lighter-zoo"
+    "lighter-zoo",
+    "hydra-core>=1.3.2",
+    'tensordict'
 ]
 
 [project.urls]

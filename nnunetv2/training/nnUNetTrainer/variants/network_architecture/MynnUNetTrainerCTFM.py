@@ -50,9 +50,10 @@ class MynnUNetTrainerCTFM(nnUNetTrainer):
                 if nnUNet_results is not None else None
 
         self.output_folder = join(self.output_folder_base, f'fold_{fold}')
+        self.enable_deep_supervision = False
     
-    #@staticmethod
-    def build_network_architecture(self,
+    @staticmethod
+    def build_network_architecture(
                                    architecture_class_name: str,
                                    arch_init_kwargs: dict,
                                    arch_init_kwargs_req_import: Union[List[str], Tuple[str, ...]],

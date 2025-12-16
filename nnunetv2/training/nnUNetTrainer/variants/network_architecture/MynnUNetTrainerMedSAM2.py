@@ -2,6 +2,8 @@ from typing import Union, Tuple, List
 from torch import nn
 import torch
 import os
+import sys
+
 from torch import autocast
 from huggingface_hub import hf_hub_download
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
@@ -19,7 +21,7 @@ from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
 
 from nnunetv2.training.dataloading.data_loader_3d_random_raters import nnUNetDataLoader3D_channel_sampler
 
-class MynnUNetTrainerMedSam2(nnUNetTrainer):
+class MynnUNetTrainerMedSAM2(nnUNetTrainer):
     def __init__(
         self,
         plans: dict,
@@ -51,8 +53,8 @@ class MynnUNetTrainerMedSam2(nnUNetTrainer):
 
         self.output_folder = join(self.output_folder_base, f'fold_{fold}')
     
-    #@staticmethod
-    def build_network_architecture(self,
+    @staticmethod
+    def build_network_architecture(
                                    architecture_class_name: str,
                                    arch_init_kwargs: dict,
                                    arch_init_kwargs_req_import: Union[List[str], Tuple[str, ...]],
@@ -60,10 +62,35 @@ class MynnUNetTrainerMedSam2(nnUNetTrainer):
                                    num_output_channels: int,
                                    enable_deep_supervision: bool = True) -> nn.Module:
 
+        medsam2_path = os.path.join(os.path.dirname(os.getcwd()), 'MedSAM2')
+        if not os.path.exists(medsam2_path):
+            medsam2_path = os.getenv('MEDSAM2_PATH')
+        else:
+            #os.environ['PYTHONPATH'] = f"{os.environ.get('PYTHONPATH', '')}:{medsam2_path}"
+            os.environ['HYDRA_FULL_ERROR'] = "1"
+        sys.path.append(medsam2_path)
+
+        #load weights
         file_path = hf_hub_download(repo_id="wanglab/MedSAM2", filename="MedSAM2_latest.pt")
-        checkpoint = torch.load(file_path)
+        checkpoint = torch.load(file_path)['model']
+
+       #init model architecture
+        from hydra.utils import instantiate, to_absolute_path
+        from omegaconf import OmegaConf
 
 
+        medsam2_cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sam2.1_hiera_tiny512_FLARE_RECIST.yaml')
+        #from nnunetv2.training.nnUNetTrainer.variants.network_architecture.sam2 import SAM2Train
+        #in the network_architecture folder all from MedSAM2/training/model/sam2 should be copied
+        # (in dataloading sam2_data_utils should come from MedSAM2.training.utils.data_utils.py)
+        #reinstantiating using hydra is required for consistency
+        cfg = OmegaConf.load(medsam2_cfg_path)
+        model = instantiate(cfg.trainer.model, _recursive_=False)
+
+        model.load_state_dict(checkpoint, strict=False)
+
+
+        print(1)
 
         return model
 
