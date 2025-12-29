@@ -21,6 +21,7 @@ from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
 
 from nnunetv2.training.dataloading.data_loader_3d_random_raters import nnUNetDataLoader3D_channel_sampler
 
+#not functional class below
 class MynnUNetTrainerMedSAM2(nnUNetTrainer):
     def __init__(
         self,
@@ -41,6 +42,8 @@ class MynnUNetTrainerMedSAM2(nnUNetTrainer):
         self.weight_ctline_dice_loss = 0.0 #-->
         self.adjusted_sampling = False
         self.freeze_encoder = False
+
+        self.weight_decay = 0.01
 
         if model_addname is None:
             self.output_folder_base = join(nnUNet_results, self.plans_manager.dataset_name,
@@ -299,3 +302,15 @@ class MynnUNetTrainerMedSAM2(nnUNetTrainer):
                 self.n_accumulated_grads = 0
 
         return {'loss': l.detach().cpu().numpy()}
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(
+            self.network.parameters(),
+            lr=self.initial_lr,
+            weight_decay=self.weight_decay
+        )
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.num_epochs)
+        return optimizer, lr_scheduler
+
+    def perform_actual_validation(self, save_probabilities: bool =False):
+        pass

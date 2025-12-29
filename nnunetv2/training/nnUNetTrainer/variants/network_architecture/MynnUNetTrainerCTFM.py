@@ -310,3 +310,6 @@ class MynnUNetTrainerCTFM(nnUNetTrainer):
         )
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.num_epochs)
         return optimizer, lr_scheduler
+
+    def perform_actual_validation(self, save_probabilities: bool =False):
+        pass

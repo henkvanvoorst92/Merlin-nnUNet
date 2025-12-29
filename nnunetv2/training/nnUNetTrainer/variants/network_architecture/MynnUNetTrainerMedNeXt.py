@@ -3,12 +3,8 @@ from torch import nn
 import torch
 import os, sys
 
-from huggingface_hub import hf_hub_download
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 from nnunetv2.training.lr_scheduler.polylr import PolyLRScheduler
-#from nnunetv2.training.nnUNetTrainer.variants.network_architecture.MynnUNetTrainer import MynnUNetTrainer
-from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models import clip_model_3d
-from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models import unet_decoder
 from batchgenerators.utilities.file_and_folder_operations import join
 from nnunetv2.paths import nnUNet_preprocessed, nnUNet_results
 from nnunetv2.training.dataloading.data_loader import nnUNetDataLoader
@@ -20,6 +16,8 @@ from batchgenerators.dataloading.single_threaded_augmenter import SingleThreaded
 from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
 
 from nnunetv2.training.dataloading.data_loader_3d_random_raters import nnUNetDataLoader3D_channel_sampler
+
+from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models.mednextv1.create_mednext_v1 import create_mednext_v1
 
 #not working right now
 class MynnUNetTrainerMedNeXt(nnUNetTrainer):
@@ -61,23 +59,18 @@ class MynnUNetTrainerMedNeXt(nnUNetTrainer):
                                    arch_init_kwargs_req_import: Union[List[str], Tuple[str, ...]],
                                    num_input_channels: int,
                                    num_output_channels: int,
-                                   enable_deep_supervision: bool = True) -> nn.Module:
-
-        # add Mednext import
-        mednext_path = os.path.join(os.path.dirname(os.getcwd()), 'MedNeXt')
-        if not os.path.exists(mednext_path):
-            mednext_path = os.getenv('MEDNEXT_PATH')
-
-        sys.path.append(mednext_path)
-        from nnunet_mednext import create_mednext_v1
+                                   enable_deep_supervision: bool = False) -> nn.Module:
 
         model = create_mednext_v1(
                       num_input_channels = num_input_channels,
                       num_classes = num_output_channels,
                       model_id = arch_init_kwargs['model_id'], # S, B, M and L are valid model ids
                       kernel_size = arch_init_kwargs['kernel_size'],  # 3x3x3 and 5x5x5 were tested in publication
-                      deep_supervision = True     # was used in publication
+                      deep_supervision = True    # was used in publication
                     )
+
+        #"out_1.conv_out.weight", "out_1.conv_out.bias", "out_2.conv_out.weight", "out_2.conv_out.bias", "out_3.conv_out.weight", "out_3.conv_out.bias", "out_4.conv_out.weight", "out_4.conv_out.bias"
+
         return model
 
     def set_deep_supervision_enabled(self, enabled: bool):

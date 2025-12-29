@@ -35,6 +35,7 @@ from nnunetv2.utilities.label_handling.label_handling import determine_num_input
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager, ConfigurationManager
 from nnunetv2.utilities.utils import create_lists_from_splitted_dataset_folder
 
+from monai.inferers import sliding_window_inference
 
 class nnUNetPredictor(object):
     def __init__(self,
@@ -45,10 +46,12 @@ class nnUNetPredictor(object):
                  device: torch.device = torch.device('cuda'),
                  verbose: bool = False,
                  verbose_preprocessing: bool = False,
-                 allow_tqdm: bool = True):
+                 allow_tqdm: bool = True,
+                 use_monai_inferers: bool = False):
         self.verbose = verbose
         self.verbose_preprocessing = verbose_preprocessing
         self.allow_tqdm = allow_tqdm
+        self.use_monai_inferers = use_monai_inferers #monai allows for larger models/images to run
 
         self.plans_manager, self.configuration_manager, self.list_of_parameters, self.network, self.dataset_json, \
         self.trainer_name, self.allowed_mirroring_axes, self.label_manager = None, None, None, None, None, None, None, None
@@ -383,7 +386,12 @@ class nnUNetPredictor(object):
                     proceed = not check_workers_alive_and_busy(export_pool, worker_list, r, allowed_num_queued=2)
 
                 # convert to numpy to prevent uncatchable memory alignment errors from multiprocessing serialization of torch tensors
-                prediction = self.predict_logits_from_preprocessed_data(data).cpu().detach().numpy()
+                if self.use_monai_inferers:
+                    #new, this allows for larger image and models
+                    prediction = self.monai_predict_logits_from_preprocessed_data(data).cpu().detach().numpy()
+                else:
+                    prediction = self.predict_logits_from_preprocessed_data(data).cpu().detach().numpy()
+
 
                 if ofile is not None:
                     print('sending off prediction to background worker for resampling and export')
@@ -501,7 +509,45 @@ class nnUNetPredictor(object):
 
         if self.verbose: print('Prediction done')
         torch.set_num_threads(n_threads)
+        print('logits shape:', prediction.shape)
         return prediction
+
+    def monai_predict_logits_from_preprocessed_data(self, data: torch.Tensor) -> torch.Tensor:
+        """
+        IMPORTANT! IF YOU ARE RUNNING THE CASCADE, THE SEGMENTATION FROM THE PREVIOUS STAGE MUST ALREADY BE STACKED ON
+        TOP OF THE IMAGE AS ONE-HOT REPRESENTATION! SEE PreprocessAdapter ON HOW THIS SHOULD BE DONE!
+
+        RETURNED LOGITS HAVE THE SHAPE OF THE INPUT. THEY MUST BE CONVERTED BACK TO THE ORIGINAL IMAGE SIZE.
+        SEE convert_predicted_logits_to_segmentation_with_correct_shape
+        """
+        n_threads = torch.get_num_threads()
+        torch.set_num_threads(default_num_processes if default_num_processes < n_threads else n_threads)
+        prediction = None
+
+        for params in self.list_of_parameters:
+
+            # messing with state dict names...
+            if not isinstance(self.network, OptimizedModule):
+                self.network.load_state_dict(params)
+            else:
+                self.network._orig_mod.load_state_dict(params)
+
+            # why not leave prediction on device if perform_everything_on_device? Because this may cause the
+            # second iteration to crash due to OOM. Grabbing that with try except cause way more bloated code than
+            # this actually saves computation time
+
+            if prediction is None:
+                prediction = self.monai_predict_from_raw_data(data).to('cpu')
+            else:
+                prediction += self.monai_predict_from_raw_data(data).to('cpu')
+
+        if len(self.list_of_parameters) > 1:
+            prediction /= len(self.list_of_parameters)
+
+        if self.verbose: print('Prediction done')
+        torch.set_num_threads(n_threads)
+        return prediction
+
 
     def _internal_get_sliding_window_slicers(self, image_size: Tuple[int, ...]):
         slicers = []
@@ -678,6 +724,41 @@ class nnUNetPredictor(object):
             # revert padding
             predicted_logits = predicted_logits[(slice(None), *slicer_revert_padding[1:])]
         return predicted_logits
+
+    def monai_predict_from_raw_data(self, input_image: torch.Tensor):
+
+        assert isinstance(input_image, torch.Tensor)
+
+        self.network = self.network.to(self.device)
+        self.network.eval()
+
+        with torch.no_grad(), torch.amp.autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
+            pred = sliding_window_inference(
+                input_image.unsqueeze(1), #dims: NxCxDxWxH
+                roi_size=self.configuration_manager.patch_size,
+                sw_batch_size=4,  # <= your controlled batch size
+                predictor=self.network,
+                overlap=self.tile_step_size,
+                mode='gaussian',
+                padding_mode='reflect',
+                sw_device=self.device,
+                device=self.device,
+                progress=False
+            )
+
+        if 'mednext' in self.plans_manager.plans_name.lower() and (isinstance(pred, tuple) or isinstance(pred, list)):
+            #mednext returns a tuple for each deep supervision layer an output
+            pred = pred[0]
+
+        if 'merlin' in self.plans_manager.plans_name.lower():
+            n_output_chans = len(self.label_manager.label_dict)
+            if n_output_chans>1:
+                pred = pred[:, :n_output_chans, ...]
+
+        if len(pred.shape)==5:
+            pred = pred[0,...]
+
+        return pred
 
     def predict_from_files_sequential(self,
                            list_of_lists_or_source_folder: Union[str, List[List[str]]],

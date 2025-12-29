@@ -1,13 +1,12 @@
 from typing import Union, Tuple, List
 from torch import nn
 import torch
-import os, sys
-
-
+import os
+from torch import autocast
 from huggingface_hub import hf_hub_download
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
-from nnunetv2.training.lr_scheduler.polylr import PolyLRScheduler
-from torch.optim.lr_scheduler import LinearLR
+from nnunetv2.utilities.helpers import dummy_context
+
 from batchgenerators.utilities.file_and_folder_operations import join
 from nnunetv2.paths import nnUNet_preprocessed, nnUNet_results
 from nnunetv2.training.dataloading.data_loader import nnUNetDataLoader
@@ -19,14 +18,9 @@ from batchgenerators.dataloading.single_threaded_augmenter import SingleThreaded
 from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
 
 from nnunetv2.training.dataloading.data_loader_3d_random_raters import nnUNetDataLoader3D_channel_sampler
+from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models.SAMMed3D import SamMed3D_ImageOnly
 
-from huggingface_hub import hf_hub_download
-from monai.networks.nets import DynUNet
-from pathlib import Path
-
-
-#not working right now
-class MynnUNetTrainerVesselFM(nnUNetTrainer):
+class MynnUNetTrainerSAMMed3D(nnUNetTrainer):
     def __init__(
         self,
         plans: dict,
@@ -35,7 +29,7 @@ class MynnUNetTrainerVesselFM(nnUNetTrainer):
         dataset_json: dict,
         unpack_dataset: bool = True,
         model_addname: str = None,
-        device: torch.device = torch.device("cuda"),
+        device: torch.device = torch.device("cuda")
     ):
         super().__init__(plans, configuration, fold, dataset_json, model_addname, device)
 
@@ -59,15 +53,8 @@ class MynnUNetTrainerVesselFM(nnUNetTrainer):
                 if nnUNet_results is not None else None
 
         self.output_folder = join(self.output_folder_base, f'fold_{fold}')
-
-        self.weight_decay = 0.1
-        self.oversample_foreground_percent = 0.33
-        self.probabilistic_oversampling = False
-        self.num_iterations_per_epoch = 250
-        self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 1000
         self.enable_deep_supervision = False
-    
+
     @staticmethod
     def build_network_architecture(
                                    architecture_class_name: str,
@@ -77,37 +64,11 @@ class MynnUNetTrainerVesselFM(nnUNetTrainer):
                                    num_output_channels: int,
                                    enable_deep_supervision: bool = True) -> nn.Module:
 
+        import medim
+        ckpt_path = "https://huggingface.co/blueyo0/SAM-Med3D/blob/main/sam_med3d_turbo.pth"
+        sam3d = medim.create_model("SAM-Med3D", pretrained=True, checkpoint_path=ckpt_path)
 
-        model = DynUNet(
-            spatial_dims=3,
-            in_channels=num_input_channels,
-            out_channels=num_output_channels,
-            kernel_size=[[3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3]],
-            strides=[[1, 1, 1], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2]],
-            upsample_kernel_size=[[2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2]],
-            filters=[32, 64, 128, 256, 320, 320],
-            res_block=True,
-        )
-
-        hf_hub_download(repo_id='bwittmann/vesselFM', filename='meta.yaml') # required to track downloads
-        ckpt = torch.load(
-            hf_hub_download(repo_id='bwittmann/vesselFM', filename='vesselFM_base.pt'), weights_only=True
-        )
-
-        # adapt for multiclass output
-        if num_output_channels == 1:
-            model.load_state_dict(ckpt)
-        else:
-            # repeats the instantiated weights of single class for multiclass (manupulate checkpoint config)
-            w_out = ckpt['output_block.conv.conv.weight'].detach().clone()
-            b_out = ckpt['output_block.conv.conv.bias'].detach().clone()
-
-            # w_unif = torch.nn.init.kaiming_uniform_(torch.empty_like(w_out))
-            # b_unif = torch.nn.init.zeros_(torch.empty_like(b_out))
-
-            ckpt['output_block.conv.conv.weight'] = torch.concat([w_out for i in range(num_output_channels)])
-            ckpt['output_block.conv.conv.bias'] = torch.concat([b_out for i in range(num_output_channels)])
-            model.load_state_dict(ckpt, strict=True)
+        model = SamMed3D_ImageOnly(sam3d, output_classes=num_output_channels)
 
         return model
 
@@ -266,15 +227,57 @@ class MynnUNetTrainerVesselFM(nnUNetTrainer):
 
         return mt_gen_train, mt_gen_val
 
-    # def configure_optimizers(self):
-    #     optimizer = torch.optim.AdamW(
-    #         self.network.parameters(),
-    #         lr=self.initial_lr,
-    #         weight_decay=self.weight_decay
-    #     )
-    #     lr_scheduler = LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=150)
-    #     #PolyLRScheduler(optimizer, self.initial_lr, self.num_epochs)
-    #     return optimizer, lr_scheduler
+    def train_step(self, batch: dict) -> dict:
+        data = batch['data']
+        target = batch['target']
+
+        data = data.to(self.device, non_blocking=True)
+        if isinstance(target, list):
+            target = [i.to(self.device, non_blocking=True) for i in target]
+        else:
+            target = target.to(self.device, non_blocking=True)
+
+        #self.n_grad_accum = self.n_grad_accum.to(self.device)
+        #self.n_accumulated_grads = self.n_accumulated_grads.to(self.device)
+
+        if self.n_accumulated_grads==0:
+            self.optimizer.zero_grad(set_to_none=True)
+            #print('Optim zero grad')
+
+        # Autocast can be annoying
+        # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
+        # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
+        # So autocast will only be active if we have a cuda device.
+        with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context(): #
+            output = self.network(data)
+            del data
+            cur_loss = self.loss(output, target)
+            if (self.n_grad_accum > 1):
+                l = cur_loss / self.n_grad_accum
+            else:
+                l = cur_loss
+
+            self.n_accumulated_grads+=1
+
+        if self.grad_scaler is not None:
+            self.grad_scaler.scale(l).backward()
+            if self.n_accumulated_grads % self.n_grad_accum == 0:
+                #print('Backprop')
+                self.grad_scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                self.grad_scaler.step(self.optimizer)
+                self.grad_scaler.update()
+                self.n_accumulated_grads = 0
+        else:
+            l.backward()
+            if self.n_accumulated_grads % self.n_grad_accum == 0:
+                #print('Backprop')
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+                self.optimizer.step()
+                self.n_accumulated_grads = 0
+
+        return {'loss': l.detach().cpu().numpy()}
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.network.parameters(),

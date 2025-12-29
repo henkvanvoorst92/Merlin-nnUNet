@@ -3,7 +3,7 @@ from torch import nn
 import torch
 import os
 from torch import autocast
-from huggingface_hub import hf_hub_download
+
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 from nnunetv2.utilities.helpers import dummy_context
 #from nnunetv2.training.nnUNetTrainer.variants.network_architecture.MynnUNetTrainer import MynnUNetTrainer
@@ -21,18 +21,8 @@ from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
 
 from nnunetv2.training.dataloading.data_loader_3d_random_raters import nnUNetDataLoader3D_channel_sampler
 
+from nnunetv2.training.nnUNetTrainer.variants.network_architecture.models.merlin_unet import MerlinUnet
 
-def download_file(
-    repo_id: str,
-    filename: str,
-    local_dir: str,
-):
-    os.makedirs(local_dir, exist_ok=True)
-    local_file_path = hf_hub_download(
-        repo_id=repo_id, filename=filename, local_dir=local_dir
-    )
-    print(f"{filename} downloaded and saved to {local_file_path}")
-    return local_file_path
 
 class MynnUNetTrainerMerlin(nnUNetTrainer):
     def __init__(
@@ -55,6 +45,8 @@ class MynnUNetTrainerMerlin(nnUNetTrainer):
         self.adjusted_sampling = False
         self.freeze_encoder = False
 
+        self.weight_decay = 0.01
+
         if model_addname is None:
             self.output_folder_base = join(nnUNet_results, self.plans_manager.dataset_name,
                                            self.__class__.__name__ + '__' + self.plans_manager.plans_name + "__" + configuration) \
@@ -66,42 +58,23 @@ class MynnUNetTrainerMerlin(nnUNetTrainer):
 
         self.output_folder = join(self.output_folder_base, f'fold_{fold}')
     
-    #@staticmethod
-    def build_network_architecture(self,
+    @staticmethod
+    def build_network_architecture(
                                    architecture_class_name: str,
                                    arch_init_kwargs: dict,
                                    arch_init_kwargs_req_import: Union[List[str], Tuple[str, ...]],
                                    num_input_channels: int,
-                                   num_output_channels: int,
-                                   enable_deep_supervision: bool = True) -> nn.Module:
-        model_config = {
-        "architecture": "i3_resnet_clinical_longformer",
-        "text_encoder": "clinical_longformer",
-        "use_ehr": True
-        }
-        model = clip_model_3d.Clip3D(model_config)
+                                   num_output_channels: int =3,
+                                   enable_deep_supervision: bool = False) -> nn.Module:
 
-        # Load in Merlin weights
-        file_path = download_file(
-            repo_id="stanfordmimi/Merlin",
-            filename="i3_resnet_clinical_longformer_best_clip_04-02-2024_23-21-36_epoch_99.pt",
-            local_dir=os.path.join(os.path.dirname(__file__), "models"),
+        model = MerlinUnet(
+            architecture_class_name,
+            arch_init_kwargs,
+            arch_init_kwargs_req_import,
+            num_input_channels,
+            num_output_channels,
+            enable_deep_supervision
         )
-        checkpoint = torch.load(file_path)
-        model_state_dict = model.state_dict()
-        filtered_checkpoint = {k: v for k, v in checkpoint.items() if k in model_state_dict and model_state_dict[k].size() == v.size()}
-        missing, unexpected = model.load_state_dict(filtered_checkpoint, strict=False)
-        print("Missing keys: ", missing)
-        print("Unexpected keys: ", unexpected)
-
-        model = model.encode_image
-        #freeze encoder parameters weights
-        if self.freeze_encoder:
-            for name, param in model.named_parameters():
-                param.requires_grad = False
-
-        decoder = unet_decoder.UNetDecoder(num_classes=num_output_channels, deep_supervision=enable_deep_supervision)
-        model = torch.nn.Sequential(model, decoder)
 
         return model
 
@@ -310,3 +283,15 @@ class MynnUNetTrainerMerlin(nnUNetTrainer):
                 self.n_accumulated_grads = 0
 
         return {'loss': l.detach().cpu().numpy()}
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(
+            self.network.parameters(),
+            lr=self.initial_lr,
+            weight_decay=self.weight_decay
+        )
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.num_epochs)
+        return optimizer, lr_scheduler
+
+    def perform_actual_validation(self, save_probabilities: bool =False):
+        pass

@@ -255,7 +255,6 @@ def run_training(dataset_name_or_id: Union[str, int],
             cudnn.deterministic = False
             cudnn.benchmark = True
 
-
         if not only_run_validation:
             nnunet_trainer.run_training()
 
