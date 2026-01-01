@@ -53,6 +53,9 @@ def init_args(args=None, print_args=True):
     parser.add_argument('--use_monai_inferers', action="store_true",
                         help='For large models monai inferers are needed')
 
+    parser.add_argument('--ID_incl', default=None,
+                        help='Selected IDs for inference')
+
     args = parser.parse_args(args)
 
     return args
@@ -148,10 +151,13 @@ def assign_job_numbers(df, num_jobs):
     return df
 
 def create_input_file(args, n_jobs=10, image_dirs=['NCCT-3chan', 'dwi'],
-                      input_file=None, save=True, ID_splitter='_'):
+                      input_file=None, save=True, ID_splitter='_', ID_incl=None):
+    #ID incl can be used to only select IDS of interest
     dir_inp = os.path.join(args.p_out, args.image_dir)
     IDs = list(set([f.split(ID_splitter)[0] for f in os.listdir(dir_inp) if '.nii' in f]))
 
+    if ID_incl is not None:
+        IDs = [ID for ID in IDs if ID in ID_incl]
     # find the local files
     dct = {}
     na_imd = []

@@ -100,7 +100,12 @@ if __name__ == "__main__":
     if os.path.exists(input_file):
         df = pd.read_excel(input_file, index_col=0)
     else:
-        df = create_input_file(args, image_dirs=image_dirs, input_file=input_file, ID_splitter=args.ID_splitter if hasattr(args, 'ID_splitter') else '_')
+        df = create_input_file(args,
+                               image_dirs=image_dirs,
+                               input_file=input_file,
+                               ID_splitter=args.ID_splitter if hasattr(args, 'ID_splitter') else '_',
+                               ID_incl=args.ID_incl if hasattr(args, 'ID_incl') else None
+                               )
 
     #IDs = list(set([f.split('_')[0] for f in os.listdir('/media/hvv/71672b1c-e082-495c-b560-a2dfc7d5de59/data/BL_NCCT/CRISP2/processed_june25/iat_dwi_bl_seg_june25')]))
     #df[np.isin(df.index, IDs)].to_excel(input_file)
@@ -109,7 +114,7 @@ if __name__ == "__main__":
         #slice the part of the IDs out that represent the job
         job = ast.literal_eval(args.job)
         df = df[np.isin(df['job'], job)]
-    IDs = df.index.tolist()
+    IDs = df.index.astype(str).tolist()
 
     #if to many models are used reduce the size of the total jobs (otherwise processing goes x len models)
     #this distributes multiple jobs within a gpu
@@ -124,6 +129,7 @@ if __name__ == "__main__":
     pp_jobs = []
     for model, channels in args.models.items():
         addname = '_' + args.addname if hasattr(args, 'addname') else ''
+        plansname = model.split('__')[1]
 
         model_dir = os.path.join(args.model_dir, model)
         m = os.path.basename(model_dir)
@@ -132,6 +138,12 @@ if __name__ == "__main__":
             addname = name+addname
             if addname[0] != '_':
                 addname = '_'+addname
+
+        if plansname=='nnUNetPlans':
+            addname = '_org' + addname
+        elif 'ResEnc' in plansname:
+            name = '_'+plansname.replace('nnUNet','').replace('Plans','').replace('UNet','')
+            addname = name + addname
 
         subdir_out = '{}_{}{}'.format(args.image_dir, model.split(os.sep)[0], addname)
         print(subdir_out)

@@ -1,11 +1,12 @@
 import numpy as np
 import SimpleITK as sitk
-from sklearn.metrics import confusion_matrix, multilabel_confusion_matrix
+from skimage.morphology import skeletonize, skeletonize_3d
+from skimage.measure import euler_number, label
+from sklearn.metrics import confusion_matrix, roc_auc_score, average_precision_score, multilabel_confusion_matrix
 from nnunetv2.my_utils.utils import image_or_path_load, np2sitk
 from scipy.stats import sem, t
 from scipy import stats
 import pandas as pd
-
 def compute_volume(mask: sitk.SimpleITK.Image or str):
     # mask is an sitk image
     # used to compute the volume in ml for foreground
@@ -76,7 +77,71 @@ def compute_binary_hausdorff(gt_bin: sitk.Image, pred_bin: sitk.Image):
 def np_dice(y_true,y_pred,add=1e-6):
 	return (2*(y_true*y_pred).sum()+add)/(y_true.sum()+y_pred.sum()+add)
 
-def compare_masks(pred_mask: sitk.Image | str, gt_mask: sitk.Image | str, compute_hausdorff=False) -> dict:
+def cl_dice(y_pred, y_true):
+    """
+    Adapted from https://github.com/jocpae/clDice/blob/master/cldice_metric/cldice.py.
+    """
+    def cl_score(v, s):
+        return np.sum(v * s) / np.sum(s)
+    if len(y_pred.shape) == 2:
+        tprec = cl_score(y_pred, skeletonize(y_true))
+        tsens = cl_score(y_true, skeletonize(y_pred))
+    elif len(y_pred.shape) == 3:
+        tprec = cl_score(y_pred, skeletonize_3d(y_true))
+        tsens = cl_score(y_true, skeletonize_3d(y_pred))
+    else:
+        raise ValueError(f"Invalid shape for cl_dice: {y_pred.shape}")
+    return 2 * tprec * tsens / (tprec + tsens + np.finfo(float).eps)
+
+def extract_labels(gt_array, pred_array):
+    """
+    Adapted from https://github.com/CoWBenchmark/TopCoW_Eval_Metrics/blob/master/metric_functions.py#L18.
+    """
+    labels_gt = np.unique(gt_array)
+    labels_pred = np.unique(pred_array)
+    labels = list(set().union(labels_gt, labels_pred))
+    labels = [int(x) for x in labels]
+    return labels
+
+def betti_number_error(gt, pred):
+    """
+    Adapted from https://github.com/CoWBenchmark/TopCoW_Eval_Metrics/blob/master/metric_functions.py#L250.
+    """
+    labels = extract_labels(gt_array=gt, pred_array=pred)
+    labels.remove(0)
+
+    if len(labels) == 0:
+        return 0, 0
+    assert len(labels) == 1 and 1 in labels, "Invalid binary segmentatio.n"
+
+    gt_betti_numbers = betti_number(gt)
+    pred_betti_numbers = betti_number(pred)
+    betti_0_error = abs(pred_betti_numbers[0] - gt_betti_numbers[0])
+    betti_1_error = abs(pred_betti_numbers[1] - gt_betti_numbers[1])
+    return betti_0_error, betti_1_error
+
+def betti_number(img):
+    """
+    Adapted from https://github.com/CoWBenchmark/TopCoW_Eval_Metrics/blob/master/metric_functions.py#L186.
+    """
+    assert img.ndim == 3
+    N6 = 1
+    N26 = 3
+
+    padded = np.pad(img, pad_width=1)
+    assert set(np.unique(padded)).issubset({0, 1})
+
+    _, b0 = label(padded, return_num=True, connectivity=N26)
+    euler_char_num = euler_number(padded, connectivity=N26)
+    _, b2 = label(1 - padded, return_num=True, connectivity=N6)
+
+    b2 -= 1
+    b1 = b0 + b2 - euler_char_num
+    return [b0, b1, b2]
+
+
+
+def compare_masks(pred_mask: sitk.Image | str, gt_mask: sitk.Image | str, compute_hausdorff=False, vessel_metrics=False) -> dict:
     """
     Compare a predicted and ground truth binary mask using Dice, Hausdorff, TPR, FPR, PPV, and NPV.
 
@@ -105,6 +170,19 @@ def compare_masks(pred_mask: sitk.Image | str, gt_mask: sitk.Image | str, comput
         hd_filter = sitk.HausdorffDistanceImageFilter()
         hd_filter.Execute(gt_mask_bin, pred_mask_bin)
         hausdorff = hd_filter.GetHausdorffDistance()
+
+    if vessel_metrics:
+        cldice = cl_dice(
+            sitk.GetArrayFromImage(pred_mask_bin),
+            sitk.GetArrayFromImage(gt_mask_bin)
+        )
+
+        [b0_true,b1_true,b2_true] = betti_number(sitk.GetArrayFromImage(gt_mask_bin))
+        [b0_pred,b1_pred,b2_pred] = betti_number(sitk.GetArrayFromImage(pred_mask_bin))
+        betti_0_error = abs(b0_pred - b0_true)
+        betti_1_error = abs(b1_pred - b1_true)
+        betti_2_error = abs(b2_pred - b2_true)
+
 
     # Convert masks to NumPy arrays
     y_true = sitk.GetArrayFromImage(gt_mask_bin).flatten()
@@ -140,6 +218,20 @@ def compare_masks(pred_mask: sitk.Image | str, gt_mask: sitk.Image | str, comput
     if compute_hausdorff:
         results['Hausdorff'] = hausdorff
 
+    if vessel_metrics:
+        results['clDice'] = cldice
+        #betti errors
+        results['betti_0_error'] = betti_0_error
+        results['betti_1_error'] = betti_1_error
+        results['betti_2_error'] = betti_2_error
+        #add pred and true betti numbers
+        results['betti_0_true'] = b0_true
+        results['betti_1_true'] = b1_true
+        results['betti_2_true'] = b2_true
+        results['betti_0_pred'] = b0_pred
+        results['betti_1_pred'] = b1_pred
+        results['betti_2_pred'] = b2_pred
+
     return results
 
 def compare_multiclass_masks(
@@ -148,6 +240,7 @@ def compare_multiclass_masks(
     roi_mask: sitk.Image | str = None, #ROI to adjust pred and gt (specific area for analyses)
     compute_hausdorff: bool = False,
     include_background: bool = False,
+    vessel_metrics: bool = False
 ) -> dict:
     """
     Compare predicted vs. ground-truth *multiclass* masks.
@@ -250,6 +343,24 @@ def compare_multiclass_masks(
                 for m, number in hd.items():
                     metrics[m] = number
 
+        if vessel_metrics:
+            metrics['cldice'] = cl_dice(
+                sitk.GetArrayFromImage(pred_bin),
+                sitk.GetArrayFromImage(gt_bin)
+            )
+            [b0_true, b1_true, b2_true] = betti_number(sitk.GetArrayFromImage(gt_bin))
+            [b0_pred, b1_pred, b2_pred] = betti_number(sitk.GetArrayFromImage(pred_bin))
+            metrics['betti_0_error'] = abs(b0_pred - b0_true)
+            metrics['betti_1_error'] = abs(b1_pred - b1_true)
+            metrics['betti_2_error'] = abs(b2_pred - b2_true)
+            # add pred and true betti numbers
+            metrics['betti_0_true'] = b0_true
+            metrics['betti_1_true'] = b1_true
+            metrics['betti_2_true'] = b2_true
+            metrics['betti_0_pred'] = b0_pred
+            metrics['betti_1_pred'] = b1_pred
+            metrics['betti_2_pred'] = b2_pred
+
         per_class[int(c)] = metrics
 
     # Macro average (unweighted mean across classes)
@@ -269,6 +380,12 @@ def compare_multiclass_masks(
         for hd_measure in ['Hausdorff', 'HD95', 'AHD']:
             vals = [v[hd_measure] for v in per_class.values() if v.get(hd_measure) is not None]
             macro_avg[hd_measure] = float(np.mean(vals)) if len(vals) else None
+
+    if vessel_metrics:
+        macro_avg['cldice'] = _macro('cldice')
+        macro_avg['betti_0_error'] = _macro('betti_0_error')
+        macro_avg['betti_1_error'] = _macro('betti_1_error')
+        macro_avg['betti_2_error'] = _macro('betti_2_error')
 
     # Micro average (pool TP/FP/FN/TN over classes)
     dice_micro = (2 * TP_sum) / (2 * TP_sum + FP_sum + FN_sum) if (2 * TP_sum + FP_sum + FN_sum) > 0 else 0.0
