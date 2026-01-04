@@ -58,6 +58,12 @@ class MerlinUnet(nn.Module):
         }
         model = clip_model_3d.Clip3D(model_config)
 
+        #freeze encoder parameters weights
+        if hasattr(self, 'freeze_encoder'):
+            if self.freeze_encoder:
+                for name, param in model.named_parameters():
+                    param.requires_grad = False
+
         # Load in Merlin weights
         file_path = download_file(
             repo_id="stanfordmimi/Merlin",
@@ -67,17 +73,12 @@ class MerlinUnet(nn.Module):
         checkpoint = torch.load(file_path)
         model_state_dict = model.state_dict()
         filtered_checkpoint = {k: v for k, v in checkpoint.items() if k in model_state_dict and model_state_dict[k].size() == v.size()}
+
         missing, unexpected = model.load_state_dict(filtered_checkpoint, strict=False)
-        print("Missing keys: ", missing)
-        print("Unexpected keys: ", unexpected)
+        # print("Missing keys: ", missing)
+        # print("Unexpected keys: ", unexpected)
 
         model = model.encode_image
-        #freeze encoder parameters weights
-        if hasattr(self, 'freeze_encoder'):
-            if self.freeze_encoder:
-                for name, param in model.named_parameters():
-                    param.requires_grad = False
-
         decoder = unet_decoder.UNetDecoder(num_classes=num_output_channels, deep_supervision=enable_deep_supervision)
         model = torch.nn.Sequential(model, decoder)
 
